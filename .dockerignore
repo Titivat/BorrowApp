@@ -1,0 +1,11 @@
+.git
+**/node_modules
+**/bin
+**/obj
+**/dist
+**/data
+**/test-results
+**/playwright-report
+**/appsettings.Local.json
+.env*
+.automation

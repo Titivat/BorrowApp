@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: borrowapp
+    runtime: docker
+    plan: free
+    region: singapore
+    branch: main
+    autoDeployTrigger: 'off'
+    healthCheckPath: /api/health
+    envVars:
+      - key: ASPNETCORE_ENVIRONMENT
+        value: Production
+      - key: DatabaseProvider
+        value: Postgres
+      - key: ConnectionStrings__Database
+        sync: false
+      - key: Storage__Url
+        sync: false
+      - key: Storage__ServiceKey
+        sync: false
+      - key: Storage__Bucket
+        value: item-photos
+      - key: Bootstrap__Email
+        sync: false
+      - key: Bootstrap__Password
+        sync: false
+      - key: Jobs__Secret
+        generateValue: true

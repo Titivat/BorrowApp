@@ -12,3 +12,5 @@
 .automation/
 *.db*
 *.user
+
+*.tsbuildinfo

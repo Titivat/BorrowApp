@@ -1,0 +1,200 @@
+name: Jira to tested PR
+on:
+  repository_dispatch:
+    types: [jira-in-progress]
+  workflow_dispatch:
+    inputs:
+      issue_key:
+        description: 'SDT ticket currently In Progress'
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: jira-${{ github.event.client_payload.issue_key || inputs.issue_key }}
+  cancel-in-progress: false
+jobs:
+  ticket:
+    if: vars.ENABLE_AI_AUTOMATION == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.base.outputs.sha }}
+      key: ${{ steps.ticket.outputs.key }}
+      branch: ${{ steps.ticket.outputs.branch }}
+      exists: ${{ steps.existing.outputs.exists }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - id: base
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - id: ticket
+        run: node .github/scripts/jira-ticket.mjs
+        env:
+          ISSUE_KEY: ${{ github.event.client_payload.issue_key || inputs.issue_key }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_WORK_TYPE_FIELD: ${{ vars.JIRA_WORK_TYPE_FIELD }}
+      - id: existing
+        run: |
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$BRANCH" >/dev/null 2>&1; then
+            echo 'exists=true' >> "$GITHUB_OUTPUT"
+            echo 'This ticket already has a branch. Review its PR instead of creating a duplicate.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'exists=false' >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.ticket.outputs.branch }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jira-input
+          path: .automation/
+          include-hidden-files: true
+          retention-days: 7
+  implement:
+    needs: ticket
+    if: needs.ticket.outputs.exists == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.ticket.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: jira-input
+          path: .automation
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: dotnet restore backend/BorrowApp.Api
+      - run: npm ci && npx playwright install --with-deps chromium
+        working-directory: frontend
+      - uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: .automation/prompt.md
+          output-file: .automation/summary.md
+          sandbox: workspace-write
+          safety-strategy: drop-sudo
+      # No write token or production secrets exist in this job.
+      - name: Package allowed code changes
+        run: |
+          git add -N frontend backend docs
+          git diff --binary -- frontend backend docs > .automation/change.patch
+          test -s .automation/change.patch
+      - uses: actions/upload-artifact@v4
+        with:
+          name: proposed-change
+          path: |
+            .automation/change.patch
+            .automation/summary.md
+          include-hidden-files: true
+          retention-days: 7
+  verify:
+    needs: [ticket, implement]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.ticket.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: proposed-change
+          path: .automation
+      - run: python3 .github/scripts/check-patch.py .automation/change.patch && git apply .automation/change.patch
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: dotnet build backend/BorrowApp.Api -c Release
+      - run: node --test scripts/*.test.mjs
+      - run: npm ci && npm run build && npx playwright install --with-deps chromium && npm run test:e2e
+        working-directory: frontend
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jira-browser-evidence
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
+          retention-days: 14
+  publish-pr:
+    needs: [ticket, verify]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    steps:
+      # Fresh job: never execute agent-authored application code with a write token.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.ticket.outputs.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: proposed-change
+          path: .automation
+      - uses: actions/download-artifact@v4
+        with:
+          name: jira-browser-evidence
+          path: .automation/evidence
+      - name: Apply verified patch and collect screenshots
+        env:
+          ISSUE_KEY: ${{ needs.ticket.outputs.key }}
+          BRANCH: ${{ needs.ticket.outputs.branch }}
+        run: |
+          python3 .github/scripts/check-patch.py .automation/change.patch
+          git switch -c "$BRANCH"
+          git apply .automation/change.patch
+          python3 - <<'PY'
+          import os, pathlib, shutil
+          target = pathlib.Path('docs/evidence') / os.environ['ISSUE_KEY']
+          target.mkdir(parents=True, exist_ok=True)
+          count = 0
+          for source in pathlib.Path('.automation/evidence').rglob('*.png'):
+              if source.stat().st_size > 10_000_000 or source.read_bytes()[:8] != b'\x89PNG\r\n\x1a\n':
+                  continue
+              shutil.copyfile(source, target / f'proof-{count}.png')
+              count += 1
+          if not count:
+              raise SystemExit('No screenshot evidence was produced.')
+          PY
+          git config user.name 'BorrowApp automation'
+          git config user.email 'borrowapp-bot@users.noreply.github.com'
+          git add frontend backend docs
+          git commit -m "$ISSUE_KEY: implement ticket with browser evidence"
+          git push origin "$BRANCH"
+      - name: Open draft PR with evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_KEY: ${{ needs.ticket.outputs.key }}
+          BRANCH: ${{ needs.ticket.outputs.branch }}
+        run: |
+          python3 - <<'PY'
+          import os, pathlib
+          key, branch, repo = os.environ['ISSUE_KEY'], os.environ['BRANCH'], os.environ['GITHUB_REPOSITORY']
+          body = f'Implements [{key}](https://titivatmo.atlassian.net/browse/{key}).\n\n'
+          summary = pathlib.Path('.automation/summary.md')
+          if summary.exists(): body += summary.read_text()[:20000] + '\n\n'
+          body += f'Validation: backend build, frontend build, browser acceptance tests. [Full test report](https://github.com/{repo}/actions/runs/{os.environ["GITHUB_RUN_ID"]}).\n\n'
+          for path in sorted(pathlib.Path(f'docs/evidence/{key}').glob('*.png')):
+              body += f'![Browser proof](https://github.com/{repo}/blob/{branch}/{path}?raw=true)\n\n'
+          body += 'Human review and merge required. Deployment is a separate manual action.\n'
+          pathlib.Path('.automation/pr-body.md').write_text(body)
+          PY
+          gh pr create --draft --base main --head "$BRANCH" --title "$ISSUE_KEY: implementation and evidence" --body-file .automation/pr-body.md
+          gh workflow run ci.yml --ref "$BRANCH"

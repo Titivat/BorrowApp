@@ -1,0 +1,22 @@
+name: Daily borrower reminders
+on:
+  schedule:
+    - cron: '0 2 * * *' # 09:00 Asia/Bangkok; GitHub schedules can be delayed.
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: daily-reminders
+  cancel-in-progress: false
+jobs:
+  remind:
+    if: vars.ENABLE_REMINDERS == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Generate due reminders and send configured email
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+          JOB_SECRET: ${{ secrets.JOB_SECRET }}
+        run: |
+          test -n "$APP_URL" && test -n "$JOB_SECRET"
+          curl --fail --silent --show-error --max-time 180 -X POST "$APP_URL/api/jobs/reminders" -H "Authorization: Bearer $JOB_SECRET"

@@ -1,0 +1,38 @@
+name: Deploy manually
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: 'Full 40-character commit SHA on main to deploy'
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify selected commit and successful CI
+        env:
+          SHA: ${{ inputs.commit_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]
+          git merge-base --is-ancestor "$SHA" origin/main
+          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SHA&status=success" --jq '.workflow_runs | map(select(.event == "push" and .head_branch == "main")) | length' > /tmp/passing-runs
+          test "$(cat /tmp/passing-runs)" -gt 0
+      - name: Deploy exact reviewed commit and wait for Render
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
+          DEPLOY_SHA: ${{ inputs.commit_sha }}
+        run: node scripts/deploy-render.mjs

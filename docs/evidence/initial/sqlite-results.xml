@@ -1,0 +1,26 @@
+<testsuites id="" name="" tests="4" failures="0" skipped="0" errors="0" time="14.942740000000002">
+<testsuite name="borrow.spec.ts" timestamp="2026-10-26T10:24:50.910Z" hostname="" tests="4" failures="0" skipped="0" time="4.742" errors="0">
+<testcase name="requires authentication and CSRF, validates uploads, restricts staff administration" classname="borrow.spec.ts" time="0.644">
+</testcase>
+<testcase name="prevents duplicate reservations and invalid transitions; reminders are idempotent" classname="borrow.spec.ts" time="0.451">
+</testcase>
+<testcase name="staff can add a photo, request, approve and return equipment with an audit trail" classname="borrow.spec.ts" time="2.449">
+<system-out>
+<![CDATA[
+[[ATTACHMENT|borrow-staff-can-add-a-pho-fe3a9-uipment-with-an-audit-trail/attachments/Approval-queue-41127ed18fc625997b66b05bdac7481cbb370d71.png]]
+
+[[ATTACHMENT|borrow-staff-can-add-a-pho-fe3a9-uipment-with-an-audit-trail/attachments/Completed-return-2ffe6aee422d8abe9f9b18a3522167149c48bd3d.png]]
+]]>
+</system-out>
+</testcase>
+<testcase name="rejecting a request releases the item, and dashboard works on mobile" classname="borrow.spec.ts" time="1.198">
+<system-out>
+<![CDATA[
+[[ATTACHMENT|borrow-rejecting-a-request-819a2-d-dashboard-works-on-mobile/attachments/Desktop-dashboard-04b9a7ebbd8bd169ac67283b1810fe57b90a7095.png]]
+
+[[ATTACHMENT|borrow-rejecting-a-request-819a2-d-dashboard-works-on-mobile/attachments/Mobile-dashboard-e8508686a249ce8b4f736b20bb68f7663412f35d.png]]
+]]>
+</system-out>
+</testcase>
+</testsuite>
+</testsuites>
